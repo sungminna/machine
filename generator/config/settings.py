@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'chain',
     'chat',
     'usr',
+    'crawling',
     'channels',
     'rest_framework',
 ]
