@@ -5,9 +5,72 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, WebDriverException
 
 from pymongo import MongoClient
+
+import pika
+import json
+
+
+class RabbitManager:
+    def __init__(self):
+        self.connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host='localhost')
+        )
+        self.channel = self.connection.channel()
+        self.channel.queue_declare(queue='task_queue', durable=True)
+
+        self.crawler = NamuCrawler()
+        self.crawler.get_attribute_and_tag()
+        print(self.crawler.attr_name, self.crawler.class_name)
+
+    def publish_url(self, url):
+        message = {
+            'url': url,
+            'timestamp': datetime.now().isoformat(),
+        }
+        self.channel.basic_publish(
+            exchange='',
+            routing_key='task_queue',
+            body=json.dumps(message),
+            properties=pika.BasicProperties(
+                delivery_mode=2,
+            )
+        )
+
+    def callback(self, ch, method, properties, body):
+        try:
+            data = json.loads(body)
+            url = data['url']
+            try:
+                href, title, paragraph_names, paragraphs, next_hrefs_unique = self.crawler.crawl_namu_data(url)
+                if href is None:
+                    return None
+                for next_url in next_hrefs_unique:
+                    self.publish_url(next_url)
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+            except Exception as e:
+                print(f"Crawling error: {e}")
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+        except json.JSONDecodeError as e:
+            print(f"JSON decode error: {e}")
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+
+    def start_consuming(self):
+        self.channel.basic_qos(prefetch_count=1)
+        self.channel.basic_consume(
+            queue='task_queue',
+            on_message_callback=self.callback
+        )
+        self.channel.start_consuming()
+
+    def close(self):
+        if self.connection and not self.connection.is_closed:
+            self.connection.close()
+
+
 class MongoDBManager:
     def __init__(self):
         self.client = MongoClient('mongodb://localhost:27017/')
@@ -41,11 +104,11 @@ class NamuCrawler():
         self.chrome_options.add_argument('--disable-infobars')
         self.chrome_options.add_argument('--disable-notifications')
         self.chrome_options.add_argument('--ignore-certificate-errors')
-        self.chrome_options.page_load_strategy = 'normal'
+        self.chrome_options.page_load_strategy = 'eager'
 
         self.driver = webdriver.Chrome(options=self.chrome_options)
-        self.driver.set_page_load_timeout(6)
-        self.wait = WebDriverWait(self.driver, 6)
+        self.driver.set_page_load_timeout(7)
+        self.wait = WebDriverWait(self.driver, 7)
 
         self.driver.execute_cdp_cmd('Network.setExtraHTTPHeaders', {
             'headers': {
@@ -61,22 +124,14 @@ class NamuCrawler():
     def crawl_startup(self):
         try:
             self.get_attribute_and_tag()
+            print(self.attr_name, self.class_name)
             hrefs = self.get_recent_link()
+            print(hrefs)
+            rqm = RabbitManager()
 
             for href in hrefs:
-                try:
-                    href, title, paragraph_names, paragraphs, next_hrefs_unique = self.crawl_namu_data(href)
-                    if href is not None and href.strip() != "":
-                        data = {
-                            'url': href,
-                            'title': title,
-                            'paragraph_names': paragraph_names,
-                            'paragraphs': paragraphs,
-                        }
-                        self.dbm.save_article(data)
-                except Exception as e:
-                    print(f"document error: {str(e)}")
-                    continue
+                rqm.publish_url(href)
+            rqm.close()
 
         except Exception as e:
             print(f"Critical error: {str(e)}")
@@ -126,7 +181,27 @@ class NamuCrawler():
             next_hrefs_unique = set(hrefs[1:])
             next_hrefs_unique = list(next_hrefs_unique)
 
+            if href is not None and href.strip() != "":
+                data = {
+                    'url': href,
+                    'title': title,
+                    'paragraph_names': paragraph_names,
+                    'paragraphs': paragraphs,
+                }
+                self.dbm.save_article(data)
             return href, title, paragraph_names, paragraph_data, next_hrefs_unique
+
+        except WebDriverException as e:
+            if "connection refused" in str(e).lower():
+                # 연결이 끊어진 경우 드라이버 재시작
+                try:
+                    self.driver.quit()
+                    self.dbm.close()
+                    self.__init__()
+                    self.get_attribute_and_tag()
+                except Exception as init_error:
+                    print(f"Failed to reinitialize driver: {init_error}")
+            return None, None, None, None, None
 
         except Exception as e:
             print(f"Error processing page {href}: {str(e)}")
@@ -243,5 +318,11 @@ class NamuCrawler():
 
 if __name__ == "__main__":
 
-    cr = NamuCrawler()
-    cr.crawl_startup()
+    #cr = NamuCrawler()
+    #cr.crawl_startup()
+    #print('init done')
+    mq = RabbitManager()
+    try:
+        mq.start_consuming()
+    except KeyboardInterrupt:
+        mq.close()
