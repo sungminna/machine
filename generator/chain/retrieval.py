@@ -5,11 +5,15 @@ from typing import List
 from langchain_core.documents import Document
 from langchain_core.runnables import chain
 
+from uuid import uuid4
+
+import asyncio
+
 
 @chain
 class Retriever:
     def __init__(self):
-        self.uri = "http://localhost:19530"
+        self.uri = "localhost:19530"
 
         self.embeddings = OllamaEmbeddings(
             model="snowflake-arctic-embed2"
@@ -34,8 +38,30 @@ class Milvus_Chain:
 
         self.vector_store = Milvus(
             embedding_function=self.embeddings,
-            connection_args={"uri": self.uri}
+            connection_args={"uri": self.uri},
         )
+
+    async def check_uniqueness(self, query: str) -> bool:
+        query = query.page_content if hasattr(query, 'page_content') else document
+        res = await self.vector_store.asimilarity_search(query, k=1)
+        if not res or res[0].page_content != query:
+            return True
+        return False
+
+    async def save_documents(self, documents):
+        # 모든 유일성 검사를 동시에 실행
+        uniqueness_checks = [self.check_uniqueness(doc) for doc in documents]
+        results = await asyncio.gather(*uniqueness_checks)
+        print(results)
+        # 유일한 문서만 필터링
+        unique_documents = [doc for doc, is_unique in zip(documents, results) if is_unique]
+
+        if not unique_documents:
+            return "No new documents to add"
+
+        uuids = [str(uuid4()) for _ in range(len(unique_documents))]
+        res = self.vector_store.aadd_documents(documents=unique_documents, ids=uuids)
+        return res
 
     async def fetch(self, query):
         results = await self.vector_store.asimilarity_search(query)

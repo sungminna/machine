@@ -87,6 +87,9 @@ class MongoDBManager:
             upsert=True
         )
 
+    def get_article(self, url):
+        return self.collection.find_one({'url': url})
+
     def close(self):
         self.client.close()
 
@@ -100,9 +103,9 @@ class NamuCrawler():
         self.chrome_options.add_argument("--window-size=1920,1080")
         self.chrome_options.add_argument('--disable-software-rasterizer')
         self.chrome_options.add_argument('--disable-extensions')
-
         self.chrome_options.add_argument('--disable-infobars')
         self.chrome_options.add_argument('--disable-notifications')
+
         self.chrome_options.add_argument('--ignore-certificate-errors')
         self.chrome_options.page_load_strategy = 'eager'
 

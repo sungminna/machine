@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
+import asyncio
+
 
 from crawling.sel import NamuCrawler, MongoDBManager, RabbitManager
+from crawling.text_preprocessing import TextPreprocessor
+from chain.retrieval import Milvus_Chain
+
+from langchain_core.documents import Document
 
 default_args = {
     'owner': 'airflow',
@@ -28,25 +31,33 @@ def process_queue(**context):
     finally:
         rabbit_manager.close()
 
-with DAG(
-    'namu_wiki_crawler',
-    default_args=default_args,
-    description='Crawls Namu Wiki articles',
-    schedule_interval=timedelta(hours=1),
-    catchup=False,
-    tags=['crawler', 'wiki'],
-) as dag:
+async def vectorize(url):
+    mongo_manager = MongoDBManager()
+    text_preprocessor = TextPreprocessor()
+    milvus_chain = Milvus_Chain()
 
-    start = EmptyOperator(task_id='start')
+    data = mongo_manager.get_article(url)
+    paragraphs = data['paragraphs']
+    paragraph_list = []
+    for para in paragraphs:
+        text = text_preprocessor.preprocess(para)
+        paragraph_list.append(text)
+    sentence_list = []
+    for para in paragraph_list:
+        sentences = text_preprocessor.chunk(para)
+        if sentences:
+            for sentence in sentences:
+                sentence = Document(page_content=sentence, metadata={'source': url})
+                sentence_list.append(sentence)
+    # vec = await milvus_chain.embed_documents(sentence_list)
+    res = await milvus_chain.save_documents(sentence_list)
 
-    init_crawler = PythonOperator(
-        task_id='initialize_and_fetch_recent',
-        python_callable=initialize_and_fetch_recent,
-    )
 
-    process_links = PythonOperator(
-        task_id='process_links',
-        python_callable=process_queue,
-    )
 
-    end = EmptyOperator(task_id='end')
+
+
+
+
+if __name__ == '__main__':
+    asyncio.run(vectorize('https://namu.wiki/w/%EA%B2%BD%EC%A3%BC%EC%97%AD'))
+
