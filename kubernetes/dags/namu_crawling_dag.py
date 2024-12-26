@@ -15,7 +15,6 @@ default_args = {
     'email_on_retry': False,
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
-    'queue': 'namu_queue',
     'execution_timeout': timedelta(hours=23),
 }
 
@@ -24,7 +23,8 @@ def should_initialize(**context):
         last_init = Variable.get('last_init')
         last_init = datetime.fromisoformat(last_init)
         current = datetime.now()
-        return (current - last_init).days >= 1
+        # return (current - last_init).days >= 1
+        return True
     except (KeyError, ValueError) as e:
         return True
 

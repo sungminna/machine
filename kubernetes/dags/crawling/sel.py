@@ -12,17 +12,24 @@ from pymongo import MongoClient
 import pika
 import json
 
+from selenium.webdriver.chrome.service import Service
 
+from airflow.utils.log.logging_mixin import LoggingMixin
 class RabbitManager:
-    def __init__(self):
+    def __init__(self, crawler=None):
+        # self.connection = pika.BlockingConnection(
+        #     pika.ConnectionParameters(host='localhost')
+        # )
         self.connection = pika.BlockingConnection(
-            pika.ConnectionParameters(host='localhost')
+            pika.ConnectionParameters(host='rabbitmq')
         )
         self.channel = self.connection.channel()
         self.channel.queue_declare(queue='task_queue', durable=True)
-
-        self.crawler = NamuCrawler()
-        self.crawler.get_attribute_and_tag()
+        if crawler:
+            self.crawler = crawler
+        else:
+            self.crawler = NamuCrawler()
+            self.crawler.get_attribute_and_tag()
         print(self.crawler.attr_name, self.crawler.class_name)
 
     def publish_url(self, url):
@@ -71,21 +78,46 @@ class RabbitManager:
             self.connection.close()
 
 
-class MongoDBManager:
+class MongoDBManager(LoggingMixin):
     def __init__(self):
-        self.client = MongoClient('mongodb://localhost:27017/')
+        super().__init__()
+        # self.client = MongoClient('mongodb://localhost:27017/')
+        self.client = MongoClient(
+            'mongodb://namu:namu@mongodb:27017/'
+        )
         self.db = self.client['namu_wiki']
         self.collection = self.db['articles']
         self.collection.create_index('url', unique=True)
 
     def save_article(self, data):
-        data['crawled_at'] = datetime.now()
+        if not data.get('url'):
+            print("Error: Missing URL")
+            return False
 
-        self.collection.update_one(
-            {'url': data['url']},
-            {'$set': data},
-            upsert=True
-        )
+        try:
+            self.log.info('mongodd')
+            self.log.info(data)
+            data['crawled_at'] = datetime.now()
+            if 'title' not in data:
+                data['title'] = ''
+            if 'paragraphs' not in data:
+                data['paragraphs'] = []
+            if 'paragraph_names' not in data:
+                data['paragraph_names'] = []
+            if 'needs_vectorize' not in data:
+                data['needs_vectorize'] = True
+            if 'vectorized_at' not in data:
+                data['vectorized_at'] = None
+            print(data)
+            result = self.collection.update_one(
+                {'url': data['url']},
+                {'$set': data},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            print(f"Error saving article: {str(e)}")
+            return False
 
     def get_article(self, url):
         return self.collection.find_one({'url': url})
@@ -93,8 +125,9 @@ class MongoDBManager:
     def close(self):
         self.client.close()
 
-class NamuCrawler():
+class NamuCrawler(LoggingMixin):
     def __init__(self, class_name="", attr_name=""):
+        super().__init__()
         self.chrome_options = Options()
         # self.chrome_options.add_argument("--headless=new")
         self.chrome_options.add_argument("--disable-gpu")
@@ -105,24 +138,40 @@ class NamuCrawler():
         self.chrome_options.add_argument('--disable-extensions')
         self.chrome_options.add_argument('--disable-infobars')
         self.chrome_options.add_argument('--disable-notifications')
-
         self.chrome_options.add_argument('--ignore-certificate-errors')
         self.chrome_options.page_load_strategy = 'eager'
 
-        self.driver = webdriver.Chrome(options=self.chrome_options)
+        self.chrome_options.add_argument("--enable-javascript")
+
+        self.chrome_options.add_argument(f'--user-agent=Googlebot')
+        self.chrome_options.add_argument(f'--header=From: googlebot(at)googlebot.com')
+        self.chrome_options.add_argument(f'--header=X-Forwarded-For: 66.249.66.1')
+
+        self.chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+        self.chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        self.chrome_options.add_experimental_option('useAutomationExtension', False)
+
+        self.chrome_options.add_argument(
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+
+
+        # self.driver = webdriver.Chrome(options=self.chrome_options)
+        self.driver = webdriver.Remote(
+            command_executor='http://selenium:4444/wd/hub',  # docker-compose의 service 이름
+            options=self.chrome_options
+        )
+
         self.driver.set_page_load_timeout(7)
         self.wait = WebDriverWait(self.driver, 7)
 
-        self.driver.execute_cdp_cmd('Network.setExtraHTTPHeaders', {
-            'headers': {
-                'X-Forwarded-For': '66.249.66.1',
-                'From': 'googlebot(at)googlebot.com'
-            }
-        })
         self.class_name = class_name
         self.attr_name = attr_name
 
         self.dbm = MongoDBManager()
+
+    def __del__(self):
+        self.driver.quit()
+
 
     def crawl_startup(self):
         try:
@@ -130,8 +179,8 @@ class NamuCrawler():
             print(self.attr_name, self.class_name)
             hrefs = self.get_recent_link()
             print(hrefs)
-            rqm = RabbitManager()
-
+            rqm = RabbitManager(self)
+            self.log.info(rqm)
             for href in hrefs:
                 rqm.publish_url(href)
             rqm.close()
@@ -156,7 +205,7 @@ class NamuCrawler():
             paragraph_names = []
             for header_level in ['h2', 'h3', 'h4']:
                 headers = self.safe_find_elements(f'{header_level}')
-                paragraph_names.extend([self.get_text_content(h) for h in headers])
+                paragraph_names.extend([str(self.get_text_content(h)) for h in headers])
             paragraph_names = self.normalize_section_number(paragraph_names)
             if paragraph_names:
                 paragraph_names = [name for name in paragraph_names if name]  # 빈 문자열 제거
@@ -180,17 +229,26 @@ class NamuCrawler():
 
             # 페이지 내 링크 수집
             links = self.driver.find_elements(By.CSS_SELECTOR, 'a[href^="/w/"]')
-            hrefs = [link.get_attribute('href') for link in links if link.get_attribute('href')]
-            next_hrefs_unique = set(hrefs[1:])
-            next_hrefs_unique = list(next_hrefs_unique)
+            hrefs = []
+            for link in links:
+                try:
+                    href = link.get_attribute('href')
+                    if href and isinstance(href, str) and href.startswith('https://namu.wiki/w/'):
+                        hrefs.append(href)
+                except Exception as e:
+                    print(f"Error getting href from link: {e}")
+                    continue
+            if hrefs:
+                next_hrefs_unique = list(set(hrefs[1:]))
+            else:
+                next_hrefs_unique = []
 
             if href is not None and href.strip() != "":
                 data = {
                     'url': href,
                     'title': title,
                     'paragraph_names': paragraph_names,
-                    #paragrph_data
-                    'paragraphs': paragraphs,
+                    'paragraphs': paragraph_data,
                     'needs_vectorize': True,
                     'vectorized_at': None,
                 }
@@ -233,23 +291,23 @@ class NamuCrawler():
         return hrefs
 
     def find_paragraph_attr_name(self):
+        self.log.info('find_attr_start')
         element = self.wait.until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "h2"))
         )
         attributes = element.get_property('attributes')
-        print(attributes)
         name = ""
         for attr in attributes:
-            print(attr)
+            self.log.info(attr)
             attr_name = attr['name']
             if attr_name.startswith('data-v-'):
                 name = attr_name
                 break
-
-        css_selector = f"div[{name}]"
+        css_selector = f"div[{name}='']"
         element = self.wait.until(
             EC.presence_of_element_located((By.CSS_SELECTOR, css_selector))
         )
+        self.log.info(element)
         attributes = element.get_property('attributes')
         parent_class_name = element.get_attribute("class")
         class_name = self.find_para_match(parent_class_name)
@@ -325,11 +383,11 @@ class NamuCrawler():
 
 if __name__ == "__main__":
 
-    cr = NamuCrawler()
-    cr.crawl_startup()
-    print('init done')
-    #mq = RabbitManager()
-    #try:
-    #    mq.start_consuming()
-    #except KeyboardInterrupt:
-    #    mq.close()
+    #cr = NamuCrawler()
+    #cr.crawl_startup()
+    #print('init done')
+    mq = RabbitManager()
+    try:
+        mq.start_consuming()
+    except KeyboardInterrupt:
+        mq.close()

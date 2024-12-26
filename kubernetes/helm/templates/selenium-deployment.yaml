@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}-ollama
+  name: {{ .Release.Name }}-selenium
   namespace: {{ .Values.global.namespace }}
   labels:
     {{- include "namu-wiki.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.ollama.replicas }}
+  replicas: {{ .Values.selenium.replicas }}
   selector:
     matchLabels:
-      app: ollama
+      app: selenium
   template:
     metadata:
       labels:
-        app: ollama
+        app: selenium
           {{- include "namu-wiki.labels" . | nindent 8 }}
     spec:
       containers:
-        - name: ollama
-          image: "{{ .Values.ollama.image.repository }}:{{ .Values.ollama.image.tag }}"
+        - name: selenium
+          image: "{{ .Values.selenium.image.repository }}:{{ .Values.selenium.image.tag }}"
           ports:
-            - containerPort: {{ .Values.ollama.service.port }}
+            - containerPort: {{ .Values.selenium.service.port }}

@@ -10,30 +10,15 @@ from uuid import uuid4
 import asyncio
 
 
-@chain
-class Retriever:
-    def __init__(self):
-        self.uri = "localhost:19530"
-
-        self.embeddings = OllamaEmbeddings(
-            model="snowflake-arctic-embed2"
-        )
-
-        self.vector_store = Milvus(
-            embedding_function=self.embeddings,
-            connection_args={"uri": self.uri}
-        )
-
-    def retriver(self, query: str) -> List[Document]:
-        return self.vector_store.similarity_search(query, k=1)
-
 
 class Milvus_Chain:
     def __init__(self):
-        self.uri = "http://localhost:19530"
+        # self.uri = "http://localhost:19530"
+        self.uri = "http://namu-milvus:19530"
 
         self.embeddings = OllamaEmbeddings(
-            model="snowflake-arctic-embed2"
+            model="snowflake-arctic-embed2",
+            base_url="http://namu-ollama:11434"
         )
 
         self.vector_store = Milvus(

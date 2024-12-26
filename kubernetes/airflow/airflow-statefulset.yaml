@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: airflow-webserver
+  namespace: namu-wiki
+spec:
+  serviceName: airflow-webserver
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+      component: webserver
+  template:
+    metadata:
+      labels:
+        app: airflow
+        component: webserver
+    spec:
+      containers:
+      - name: webserver
+        image: apache/airflow:2.10.4
+        command: ["airflow", "webserver"]
+        ports:
+        - containerPort: 8080
+        envFrom:
+        - configMapRef:
+            name: airflow-config
+        volumeMounts:
+        - name: dags
+          mountPath: /opt/airflow/dags
+  volumeClaimTemplates:
+  - metadata:
+      name: dags
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: standard
+      resources:
+        requests:
+          storage: 1Gi

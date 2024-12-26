@@ -1,0 +1,113 @@
+global:
+  namespace: namu-wiki
+  storageClass: standard
+
+mongodb:
+  auth:
+    enabled: false
+    rootPassword: "your-root-password"
+    usernames:
+      - "namu"
+    passwords:
+      - "namu"
+    databases:
+      - "namu_wiki"
+  persistence:
+    size: 10Gi
+
+rabbitmq:
+  persistence:
+    enabled: true
+    size: 8Gi
+  auth:
+    username: guest
+    password: guest
+
+
+airflow:
+  images:  # airflow.airflow 대신 images를 사용
+    airflow:
+      repository: sungmin330/custom-airflow
+      tag: "latest"
+      pullPolicy: Always
+
+  executor: CeleryExecutor
+
+  webserver:
+    defaultUser:
+      username: airflow
+      password: "airflow"
+
+  postgresql:
+    enabled: true
+    auth:
+      username: airflow
+      password: airflow
+      database: airflow
+      postgresPassword: postgres
+
+  worker:
+    securityContext:
+      privileged: true
+      capabilities:
+        add: [ 'SYS_ADMIN' ]
+
+  init:
+    enabled: true
+    createUserJob:
+      enabled: true
+    initDb:
+      enabled: true
+
+  config:
+    celery:
+      worker_concurrency: 16
+      flower_url_prefix: ""
+      broker_url: "amqp://guest:guest@namu-rabbitmq.{{ .Values.global.namespace }}.svc.cluster.local:5672/"
+      result_backend: "db+postgresql://airflow:airflow@namu-postgresql.{{ .Values.global.namespace }}.svc.cluster.local:5432/airflow"
+
+  dags:
+    persistence:
+      enabled: false
+    gitSync:
+      enabled: true
+      repo: https://github.com/sungminna/machine_airflow.git
+      branch: main
+      rev: HEAD
+      depth: 1
+      maxFailures: 2
+      subPath: "dags"
+      wait: 60
+      containerName: git-sync
+      uid: 65533
+
+selenium:
+  replicas: 1
+  image:
+    repository: selenium/standalone-chrome
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 4444
+
+ollama:
+  replicas: 1
+  image:
+    repository: ollama/ollama
+    tag: latest
+  service:
+    type: ClusterIP
+    port: 11434
+
+milvus:
+  image:
+    repository: milvus/milvus
+    tag: latest
+  cluster:
+    enabled: false  # standalone 모드
+  etcd:
+    replicaCount: 1
+  pulsar:
+    enabled: false  # standalone 모드에서는 불필요
+  minio:
+    mode: standalone

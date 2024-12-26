@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-selenium
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "namu-wiki.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.selenium.service.type }}
+  ports:
+    - port: {{ .Values.selenium.service.port }}
+      targetPort: {{ .Values.selenium.service.port }}
+  selector:
+    app: selenium

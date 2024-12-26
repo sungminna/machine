@@ -1,4 +1,8 @@
-FROM apache/airflow:2.7.3-python3.12
-LABEL authors="sungm"
+FROM apache/airflow
+USER root
+COPY requirements.txt /opt/airflow/requirements.txt
 
-ENTRYPOINT ["top", "-b"]
+USER airflow
+
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r /opt/airflow/requirements.txt

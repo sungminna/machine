@@ -1,0 +1,15 @@
+dependencies:
+- name: mongodb
+  repository: https://charts.bitnami.com/bitnami
+  version: 16.4.0
+- name: rabbitmq
+  repository: https://charts.bitnami.com/bitnami
+  version: 15.2.1
+- name: airflow
+  repository: https://airflow.apache.org
+  version: 1.15.0
+- name: milvus
+  repository: https://zilliztech.github.io/milvus-helm/
+  version: 4.2.33
+digest: sha256:f571ba39a8b754eb541d5af8c0ab3db437990c7b8dd210dac10dd6c6cfbf6113
+generated: "2024-12-25T02:45:35.5841828+09:00"
