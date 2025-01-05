@@ -10,6 +10,7 @@ from crawling.text_preprocessing import TextPreprocessor
 from chain.retrieval import Milvus_Chain
 from langchain_core.documents import Document
 
+from pymilvus import Collection, connections, MilvusClient
 
 default_args = {
     'owner': 'airflow',
@@ -20,6 +21,17 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
     'execution_timeout': timedelta(minutes=30),
 }
+
+
+def initialize_milvus():
+    try:
+        client = MilvusClient("http://milvus-standalone:19530")
+        client.create_collection(collection_name='LangChainCollection',
+                                 dimension=768, primary_field_name='pk')
+    except Exception as e:
+        print(e)
+        return 1
+    return 1
 
 
 async def vectorize(data):
@@ -33,19 +45,21 @@ async def vectorize(data):
         paragraph_list.append(text)
 
     sentence_list = []
+    source_list = []
     for para in paragraph_list:
         sentences = text_preprocessor.chunk(para)
         if sentences:
             for sentence in sentences:
-                sentence = Document(
-                    page_content=sentence,
-                    metadata={'source': data['url']}
-                )
-                sentence_list.append(sentence)
-
+                if sentence and sentence.strip():
+                    sentence = Document(
+                        page_content=sentence,
+                        metadata={'source': data['url']}
+                    )
+                    sentence_list.append(sentence)
+                    source_list.append(data['url'])
     if sentence_list:
         try:
-            await milvus_chain.save_documents(sentence_list)
+            await milvus_chain.save_documents(sentence_list, source_list)
             return True
         except Exception as e:
             print(f"Error vectorizing content for {data['url']}: {e}")
@@ -58,9 +72,13 @@ def process_new_docs(**context):
     mongo_manager = MongoDBManager()
 
     # needs_vectorize가 True인 문서 조회
-    new_docs = mongo_manager.collection.find_articles({
-        'needs_vectorize': True,
-    }, limit=100)
+    # new_docs = mongo_manager.collection.find({
+    #     'needs_vectorize': True,
+    # }, limit=100)
+
+    new_docs = mongo_manager.collection.find({})
+
+    new_docs = list(new_docs)
 
     if not new_docs:
         print("No new documents to vectorize")
@@ -88,7 +106,7 @@ with DAG(
     'namu_vectorization',
     default_args=default_args,
     description='Namu Wiki Vectorization Pipeline',
-    schedule_interval=timedelta(minutes=30),  # 5분마다 실행
+    # schedule_interval=timedelta(minutes=30),  # 5분마다 실행
     start_date=days_ago(1),
     catchup=False,
 ) as dag:
@@ -96,6 +114,11 @@ with DAG(
     start_vectorize = EmptyOperator(
         task_id='start_vectorize',
         dag=dag
+    )
+
+    init_milv = PythonOperator(
+        task_id='init_milv',
+        python_callable=initialize_milvus,
     )
 
     vectorize_task = PythonOperator(
@@ -108,4 +131,4 @@ with DAG(
         dag=dag
     )
 
-    start_vectorize >> vectorize_task >> end_vectorize
+    start_vectorize >> init_milv >> vectorize_task >> end_vectorize

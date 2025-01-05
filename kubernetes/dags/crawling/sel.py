@@ -107,7 +107,7 @@ class MongoDBManager(LoggingMixin):
             if 'needs_vectorize' not in data:
                 data['needs_vectorize'] = True
             if 'vectorized_at' not in data:
-                data['vectorized_at'] = None
+                data['vectorized_at'] = "not_yet"
             print(data)
             result = self.collection.update_one(
                 {'url': data['url']},
@@ -139,11 +139,11 @@ class NamuCrawler(LoggingMixin):
         self.chrome_options.add_argument('--disable-infobars')
         self.chrome_options.add_argument('--disable-notifications')
         self.chrome_options.add_argument('--ignore-certificate-errors')
-        self.chrome_options.page_load_strategy = 'eager'
+        # self.chrome_options.page_load_strategy = 'eager'
 
         self.chrome_options.add_argument("--enable-javascript")
 
-        self.chrome_options.add_argument(f'--user-agent=Googlebot')
+        # self.chrome_options.add_argument(f'--user-agent=Googlebot')
         self.chrome_options.add_argument(f'--header=From: googlebot(at)googlebot.com')
         self.chrome_options.add_argument(f'--header=X-Forwarded-For: 66.249.66.1')
 
@@ -250,7 +250,7 @@ class NamuCrawler(LoggingMixin):
                     'paragraph_names': paragraph_names,
                     'paragraphs': paragraph_data,
                     'needs_vectorize': True,
-                    'vectorized_at': None,
+                    'vectorized_at': "not_yet",
                 }
                 self.dbm.save_article(data)
             return href, title, paragraph_names, paragraph_data, next_hrefs_unique
@@ -292,32 +292,48 @@ class NamuCrawler(LoggingMixin):
 
     def find_paragraph_attr_name(self):
         self.log.info('find_attr_start')
-        element = self.wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "h2"))
-        )
-        attributes = element.get_property('attributes')
-        name = ""
+
+        # JavaScript로 직접 속성 가져오기
+        script = """
+        const element = document.querySelector('h2');
+        const attributes = Array.from(element.attributes);
+        return attributes.map(attr => ({
+            name: attr.name,
+            value: attr.value
+        }));
+        """
+        attributes = self.driver.execute_script(script)
+
+        # data-v- 속성 찾기
+        data_attr = None
         for attr in attributes:
             self.log.info(attr)
-            attr_name = attr['name']
-            if attr_name.startswith('data-v-'):
-                name = attr_name
+            if attr['name'].startswith('data-v-'):
+                data_attr = attr['name']
                 break
-        css_selector = f"div[{name}='']"
-        element = self.wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, css_selector))
-        )
-        self.log.info(element)
-        attributes = element.get_property('attributes')
-        parent_class_name = element.get_attribute("class")
+
+        if not data_attr:
+            raise ValueError("Could not find data-v- attribute")
+
+        # div 요소 찾기
+        script_div = f"""
+        const div = document.querySelector('div[{data_attr}]');
+        return div ? div.getAttribute('class') : null;
+        """
+        parent_class_name = self.driver.execute_script(script_div)
+        if not parent_class_name:
+            raise ValueError("No class attribute found on element")
+
         class_name = self.find_para_match(parent_class_name)
         return class_name
 
     def find_para_match(self, parent_class_name):
-        target = "div." + parent_class_name
+        target = "div." + self.escape_css_selector(parent_class_name)
+        self.log.info(target)
         elements = self.wait.until(
             EC.presence_of_all_elements_located((By.CSS_SELECTOR, target))
         )
+        self.log.info(elements)
         if len(elements) > 3:
             element = elements[2]
         else:
@@ -331,6 +347,9 @@ class NamuCrawler(LoggingMixin):
                 class_name = name
                 break
         return class_name
+
+    def escape_css_selector(self, selector):
+        return selector.replace('+', '\\+')
 
     def find_recent_changes_attr_name(self):
         element = self.wait.until(
