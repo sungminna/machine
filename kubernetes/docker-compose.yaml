@@ -349,7 +349,7 @@ services:
     environment:
       MILVUS_URL: milvus-standalone:19530
     ports:
-      - "8000:3000"
+      - "8005:3000"
 
 volumes:
   mongodb_data:

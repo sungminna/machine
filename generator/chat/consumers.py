@@ -11,6 +11,8 @@ from langchain.callbacks.base import BaseCallbackHandler
 
 from langchain_ollama import ChatOllama
 
+from langchain_milvus import Milvus
+from langchain_ollama import OllamaEmbeddings
 
 class WebsocketStreamingHandler(BaseCallbackHandler):
     """웹소켓을 통한 스트리밍 처리를 위한 콜백 핸들러"""
@@ -35,6 +37,22 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         self.user = 1
         self.conversation_id = None
         self.conversation = None
+
+        self.uri = "http://localhost:19530"
+
+        self.embeddings = OllamaEmbeddings(
+            model="snowflake-arctic-embed2",
+            base_url="http://localhost:11434"
+        )
+
+        self.vector_store = Milvus(
+            embedding_function=self.embeddings,
+            connection_args={"uri": self.uri},
+        )
+
+        self.retriever = self.vector_store.as_retriever()
+
+
 
     async def connect(self):
         try:
@@ -108,6 +126,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 'message': "An unexpected error occurred"
             })
 
+    def format_docs(self, docs):
+        return '\n\n'.join([d.page_content for d in docs])
+
     async def get_llm_response(self, user_message, context_messages, message_id):
         """LLM 응답 생성"""
         try:
@@ -139,12 +160,18 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             # 프롬프트 템플릿 설정
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
+                ("system", "Context information is below:\n{context}\n"),
                 *[(msg.type, msg.content) for msg in formatted_messages]
             ])
-
+            res = self.retriever.invoke(user_message)
+            context = self.format_docs(res)
+            print(context)
             # 체인 실행
             chain = prompt | llm.with_config({"callbacks": [stream_handler]})
-            response = await chain.ainvoke({"input": user_message})
+            response = await chain.ainvoke({
+                "input": user_message,
+                "context": context
+            })
 
             return stream_handler.full_response
 
